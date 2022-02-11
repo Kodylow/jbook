@@ -10,29 +10,30 @@ export const fetchPlugin = (inputCode: string) => {
   //plugins export objects with name property and a setup function
   return {
     name: "fetch-plugin",
+    //intercept the onLoad call to hit unpkg instead of file system
     setup(build: esbuild.PluginBuild) {
-      //intercept the onLoad call to hit unpkg instead of file system
-      build.onLoad({ filter: /.*/ }, async (args: any) => {
-        if (args.path === "index.js") {
-          return {
-            loader: "jsx",
-            contents: inputCode,
-          };
-        }
+      //return the index.js file
+      build.onLoad({ filter: /(^index\.js$)/ }, () => {
+        return {
+          loader: "jsx",
+          contents: inputCode,
+        };
+      });
 
-        //Check if file is already in cache
+      //Return early for cached
+      build.onLoad({ filter: /.*/ }, async (args: any) => {
         const cachedResult = await fileCache.getItem<esbuild.OnLoadResult>(
           args.path
         );
 
-        //if yes, return
         if (cachedResult) {
           return cachedResult;
         }
+      });
 
+      //return the css code as a style element
+      build.onLoad({ filter: /.css$/ }, async (args: any) => {
         const { data, request } = await axios.get(args.path);
-
-        const fileType = args.path.match(/.css$/) ? "css" : "jsx";
 
         const escaped = data
           //remove newlines
@@ -41,14 +42,25 @@ export const fetchPlugin = (inputCode: string) => {
           .replace(/"/g, '\\"')
           //escape single quotes
           .replace(/'/g, "\\'");
-        const contents =
-          fileType === "css"
-            ? `
+        const contents = `
             const style = document.creatElement('style');
             style.innerText = '${escaped}';
             document.head.appendChild(style);
-            `
-            : data;
+            `;
+
+        const result: esbuild.OnLoadResult = {
+          loader: "jsx",
+          contents,
+          //resolveDir passes along where the pkg was found
+          resolveDir: new URL("./", request.responseURL).pathname,
+        };
+
+        //else store response in cache
+        await fileCache.setItem(args.path, result);
+        return result;
+      });
+      build.onLoad({ filter: /.*/ }, async (args: any) => {
+        const { data, request } = await axios.get(args.path);
 
         const result: esbuild.OnLoadResult = {
           loader: "jsx",
